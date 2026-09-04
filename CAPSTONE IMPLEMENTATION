@@ -1,0 +1,426 @@
+
+from flask import Flask, render_template_string, request, jsonify, send_file
+import socket
+import ssl
+import time
+import json
+import os
+import tempfile
+import datetime
+
+app = Flask(__name__)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPORT_DIR = os.path.join(BASE_DIR, "reports")
+os.makedirs(REPORT_DIR, exist_ok=True)
+
+PAGE = r"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TLS Handshake Visualizer and Vulnerability Scanner</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f6f9;margin:0;color:#172033}
+header{background:#173f63;color:white;text-align:center;padding:26px}
+main{max-width:1150px;margin:24px auto;padding:0 18px}
+.card{background:white;border-radius:12px;padding:22px;margin:18px 0;box-shadow:0 3px 12px #0002}
+input,button{padding:11px;border-radius:7px;border:1px solid #aaa;font-size:15px;margin:4px}
+button{background:#173f63;color:white;border:0;cursor:pointer;font-weight:bold}
+.info{display:grid;grid-template-columns:230px 1fr;gap:8px;border-bottom:1px solid #eee;padding:9px 0}
+.label{font-weight:bold}
+.stage{display:inline-block;background:#e7f0f8;padding:11px;margin:5px;border-radius:7px}
+.finding{padding:12px;margin:8px 0;background:#f5f5f5;border-left:5px solid #777}
+.score{font-size:32px;font-weight:bold}
+.status-ok{font-weight:bold}
+.error{background:#fff1f1;border-left:5px solid #b33;padding:12px}
+@media(max-width:800px){.info{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+<h1>TLS Handshake Visualizer and Vulnerability Scanner</h1>
+<p>Integrated TLS Security Analysis</p>
+</header>
+<main>
+<div class="card">
+<h2>Scan TLS Endpoint</h2>
+<input id="host" value="example.com" placeholder="Hostname or IP address">
+<input id="port" type="number" value="443" min="1" max="65535">
+<button onclick="runScan()">START SCAN</button>
+<p id="status"></p>
+</div>
+<div id="result"></div>
+</main>
+<script>
+function esc(v){
+ return String(v ?? "Not available")
+  .replaceAll("&","&amp;").replaceAll("<","&lt;")
+  .replaceAll(">","&gt;").replaceAll('"',"&quot;");
+}
+function row(label,value){return `<div class="info"><span class="label">${label}</span><span>${esc(value)}</span></div>`}
+async function runScan(){
+ const status=document.getElementById("status"), result=document.getElementById("result");
+ status.textContent="Scanning TLS endpoint...";
+ result.innerHTML="";
+ try{
+  const response=await fetch("/scan",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({
+    host:document.getElementById("host").value.trim(),
+    port:Number(document.getElementById("port").value)
+   })
+  });
+  const d=await response.json();
+  if(!response.ok) throw new Error(d.error||"Scan failed");
+
+  const c=d.certificate;
+  const stages=(d.handshake||[]).map((x,i)=>`<span class="stage">${i+1}. ${esc(x)}</span>`).join("");
+  const findings=(d.findings||[]).map(x=>
+   `<div class="finding"><b>${esc(x.severity)}</b> — ${esc(x.id)}<br>${esc(x.message)}</div>`
+  ).join("") || "<p>No implemented security findings detected.</p>";
+  const san=(c.subject_alt_names||[]).map(x=>`<li>${esc(x.type)}: ${esc(x.value)}</li>`).join("")||"<li>None found</li>";
+
+  result.innerHTML=`
+  <div class="card">
+   <h2>Connection and TLS Details</h2>
+   ${row("Target",d.host+":"+d.port)}
+   ${row("Connection Status",d.connection_status)}
+   ${row("TLS Version",d.tls_version)}
+   ${row("Cipher Suite",d.cipher)}
+   ${row("Cipher Protocol",d.cipher_protocol)}
+   ${row("Cipher Strength",d.cipher_bits ? d.cipher_bits+" bits" : "Not available")}
+   ${row("Scan Time",d.scan_time_ms+" ms")}
+  </div>
+  <div class="card">
+   <h2>Certificate Details</h2>
+   ${row("Subject",c.subject)}
+   ${row("Issuer",c.issuer)}
+   ${row("Serial Number",c.serial_number)}
+   ${row("Certificate Version",c.version)}
+   ${row("Valid From",c.not_before)}
+   ${row("Valid Until",c.not_after)}
+   ${row("Validity Status",c.validity_status)}
+   ${row("Hostname Status",c.hostname_status)}
+   <p><b>Subject Alternative Names</b></p><ul>${san}</ul>
+  </div>
+  <div class="card">
+   <h2>TLS Handshake Visualization</h2>
+   ${stages||"<p>No handshake stages available.</p>"}
+  </div>
+  <div class="card">
+   <h2>Security Assessment</h2>
+   <div class="score">${d.security_score===null?"Not Scored":esc(d.security_score)+"/100"}</div>
+   <p><b>Security Level:</b> ${esc(d.security_level)}</p>
+   ${findings}
+   <p><a href="/reports/tls_scan_report.json" target="_blank">Open JSON Report</a></p>
+   <p><a href="/reports/tls_scan_report.html" target="_blank">Open HTML Report</a></p>
+  </div>
+  ${d.error?`<div class="card error"><b>Connection Diagnostic:</b> ${esc(d.error)}</div>`:""}
+  `;
+  status.textContent="Scan completed.";
+ }catch(e){
+  status.textContent="Scan failed.";
+  result.innerHTML=`<div class="card error"><b>Error:</b> ${esc(e.message)}</div>`;
+ }
+}
+</script>
+</body>
+</html>
+"""
+
+def decode_der_certificate(der_bytes):
+    """
+    Correct certificate decoding path:
+    getpeercert(binary_form=True) -> DER bytes -> PEM -> temporary PEM file
+    -> ssl._ssl._test_decode_cert().
+    """
+    if not der_bytes:
+        return {}
+    pem = ssl.DER_cert_to_PEM_cert(der_bytes)
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="ascii", suffix=".pem", delete=False
+        ) as f:
+            f.write(pem)
+            path = f.name
+        return ssl._ssl._test_decode_cert(path)
+    except Exception:
+        return {}
+    finally:
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+def common_names(cert, field):
+    values=[]
+    for item in cert.get(field, []):
+        for key,value in item:
+            if key == "commonName":
+                values.append(value)
+    return values
+
+def certificate_details(der_bytes, host):
+    cert = decode_der_certificate(der_bytes)
+
+    sans=[
+        {"type":item[0],"value":item[1]}
+        for item in cert.get("subjectAltName",[])
+        if len(item)==2
+    ]
+
+    details={
+        "subject": ", ".join(common_names(cert,"subject")) or "Not available",
+        "issuer": ", ".join(common_names(cert,"issuer")) or "Not available",
+        "serial_number": cert.get("serialNumber") or "Not available",
+        "version": cert.get("version") if cert.get("version") is not None else "Not available",
+        "not_before": cert.get("notBefore") or "Not available",
+        "not_after": cert.get("notAfter") or "Not available",
+        "subject_alt_names": sans,
+        "validity_status": "Not available",
+        "hostname_status": "Not checked"
+    }
+
+    if cert.get("notBefore") and cert.get("notAfter"):
+        try:
+            now=time.time()
+            start=ssl.cert_time_to_seconds(cert["notBefore"])
+            end=ssl.cert_time_to_seconds(cert["notAfter"])
+            if now < start:
+                details["validity_status"]="NOT YET VALID"
+            elif now > end:
+                details["validity_status"]="EXPIRED"
+            else:
+                details["validity_status"]="VALID"
+        except Exception:
+            details["validity_status"]="Unable to determine"
+
+    if cert:
+        try:
+            ssl.match_hostname(cert,host)
+            details["hostname_status"]="MATCH"
+        except ssl.CertificateError:
+            details["hostname_status"]="MISMATCH"
+        except Exception:
+            details["hostname_status"]="Unable to determine"
+
+    # Last-resort display values if a platform-specific decoder failed.
+    # OpenSSL's DER-to-text decoder is used only as a fallback for metadata.
+    if not cert:
+        try:
+            pem=ssl.DER_cert_to_PEM_cert(der_bytes)
+            decoded={}
+            path=None
+            with tempfile.NamedTemporaryFile(mode="w",encoding="ascii",suffix=".pem",delete=False) as f:
+                f.write(pem); path=f.name
+            decoded=ssl._ssl._test_decode_cert(path)
+            os.remove(path)
+            cert=decoded
+        except Exception:
+            pass
+
+    return details
+
+def scan_tls(host,port):
+    start=time.perf_counter()
+
+    result={
+        "host":host,"port":port,
+        "connection_status":"FAILED",
+        "tls_version":None,"cipher":None,
+        "cipher_protocol":None,"cipher_bits":None,
+        "certificate":{
+            "subject":"Not available","issuer":"Not available",
+            "serial_number":"Not available","version":"Not available",
+            "not_before":"Not available","not_after":"Not available",
+            "validity_status":"Not available",
+            "hostname_status":"Not checked",
+            "subject_alt_names":[]
+        },
+        "handshake":[],"findings":[],"security_score":None,
+        "security_level":"Not Scored","error":None,"scan_time_ms":None
+    }
+
+    try:
+        context=ssl.create_default_context()
+        context.check_hostname=False
+        context.verify_mode=ssl.CERT_NONE
+
+        with socket.create_connection((host,port),timeout=8) as raw:
+            with context.wrap_socket(raw,server_hostname=host) as tls:
+                result["connection_status"]="CONNECTED"
+                result["tls_version"]=tls.version()
+
+                cipher=tls.cipher()
+                if cipher:
+                    result["cipher"]=cipher[0]
+                    result["cipher_protocol"]=cipher[1]
+                    result["cipher_bits"]=cipher[2]
+
+                der=tls.getpeercert(binary_form=True)
+                if der:
+                    result["certificate"]=certificate_details(der,host)
+
+                if result["tls_version"]=="TLSv1.3":
+                    result["handshake"]=[
+                        "ClientHello","ServerHello","EncryptedExtensions",
+                        "Certificate","CertificateVerify","Finished",
+                        "Application Data"
+                    ]
+                elif result["tls_version"]=="TLSv1.2":
+                    result["handshake"]=[
+                        "ClientHello","ServerHello","Certificate",
+                        "ServerKeyExchange","ServerHelloDone",
+                        "ClientKeyExchange","ChangeCipherSpec",
+                        "Finished","Application Data"
+                    ]
+                else:
+                    result["handshake"]=[
+                        "ClientHello","ServerHello","Negotiation","Finished"
+                    ]
+
+                if result["tls_version"] in ("TLSv1","TLSv1.1"):
+                    result["findings"].append({
+                        "id":"OUTDATED_TLS","severity":"High",
+                        "message":"Outdated TLS protocol detected."
+                    })
+
+                weak=("RC4","3DES","DES","NULL","EXPORT","MD5","AES128-SHA")
+                if result["cipher"] and any(
+                    x in result["cipher"].upper() for x in weak
+                ):
+                    result["findings"].append({
+                        "id":"LEGACY_CIPHER","severity":"Medium",
+                        "message":"Legacy or weak cipher suite detected."
+                    })
+
+                if result["certificate"]["validity_status"]=="EXPIRED":
+                    result["findings"].append({
+                        "id":"CERT_EXPIRED","severity":"High",
+                        "message":"The server certificate is expired."
+                    })
+                elif result["certificate"]["validity_status"]=="NOT YET VALID":
+                    result["findings"].append({
+                        "id":"CERT_NOT_YET_VALID","severity":"High",
+                        "message":"The server certificate is not yet valid."
+                    })
+
+                if result["certificate"]["hostname_status"]=="MISMATCH":
+                    result["findings"].append({
+                        "id":"HOSTNAME_MISMATCH","severity":"High",
+                        "message":"The certificate identity does not match the requested hostname."
+                    })
+
+    except socket.gaierror as e:
+        result["error"]="DNS resolution failure: "+str(e)
+    except ConnectionRefusedError as e:
+        result["error"]="Connection refused: "+str(e)
+    except socket.timeout as e:
+        result["error"]="Connection timeout: "+str(e)
+    except ssl.SSLError as e:
+        result["error"]="TLS handshake failure: "+str(e)
+    except OSError as e:
+        result["error"]="Network error: "+str(e)
+    except Exception as e:
+        result["error"]="Unexpected scanner error: "+str(e)
+
+    if result["connection_status"]=="CONNECTED":
+        score=100
+        deductions={"Critical":30,"High":20,"Medium":10,"Low":5}
+        for finding in result["findings"]:
+            score-=deductions.get(finding["severity"],0)
+        score=max(0,min(100,score))
+        result["security_score"]=score
+        if score>=90: result["security_level"]="Strong"
+        elif score>=70: result["security_level"]="Moderate"
+        elif score>=40: result["security_level"]="Weak"
+        else: result["security_level"]="Critical"
+
+    result["scan_time_ms"]=round((time.perf_counter()-start)*1000,2)
+    return result
+
+def generate_reports(data):
+    json_path=os.path.join(REPORT_DIR,"tls_scan_report.json")
+    html_path=os.path.join(REPORT_DIR,"tls_scan_report.html")
+
+    with open(json_path,"w",encoding="utf-8") as f:
+        json.dump(data,f,indent=2)
+
+    c=data["certificate"]
+    findings="".join(
+        f"<li><b>{x['severity']}</b> — {x['id']}: {x['message']}</li>"
+        for x in data["findings"]
+    ) or "<li>No implemented security findings detected.</li>"
+
+    stages="".join(f"<li>{x}</li>" for x in data["handshake"])
+    sans="".join(f"<li>{x['type']}: {x['value']}</li>" for x in c["subject_alt_names"]) or "<li>None found</li>"
+
+    html=f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>TLS Security Assessment Report</title></head><body>
+<h1>TLS Handshake Visualizer and Vulnerability Scanner</h1>
+<h2>Connection and TLS Details</h2>
+<table border="1" cellpadding="8">
+<tr><td>Target</td><td>{data["host"]}:{data["port"]}</td></tr>
+<tr><td>Status</td><td>{data["connection_status"]}</td></tr>
+<tr><td>TLS Version</td><td>{data["tls_version"]}</td></tr>
+<tr><td>Cipher Suite</td><td>{data["cipher"]}</td></tr>
+<tr><td>Cipher Protocol</td><td>{data["cipher_protocol"]}</td></tr>
+<tr><td>Cipher Bits</td><td>{data["cipher_bits"]}</td></tr>
+<tr><td>Scan Time</td><td>{data["scan_time_ms"]} ms</td></tr>
+</table>
+<h2>Certificate Details</h2>
+<table border="1" cellpadding="8">
+<tr><td>Subject</td><td>{c["subject"]}</td></tr>
+<tr><td>Issuer</td><td>{c["issuer"]}</td></tr>
+<tr><td>Serial Number</td><td>{c["serial_number"]}</td></tr>
+<tr><td>Version</td><td>{c["version"]}</td></tr>
+<tr><td>Valid From</td><td>{c["not_before"]}</td></tr>
+<tr><td>Valid Until</td><td>{c["not_after"]}</td></tr>
+<tr><td>Validity Status</td><td>{c["validity_status"]}</td></tr>
+<tr><td>Hostname Status</td><td>{c["hostname_status"]}</td></tr>
+</table>
+<h3>Subject Alternative Names</h3><ul>{sans}</ul>
+<h2>TLS Handshake</h2><ol>{stages}</ol>
+<h2>Security Assessment</h2>
+<p>Score: {data["security_score"]}</p><p>Level: {data["security_level"]}</p>
+<ul>{findings}</ul>
+</body></html>"""
+
+    with open(html_path,"w",encoding="utf-8") as f:
+        f.write(html)
+
+@app.route("/")
+def home():
+    return render_template_string(PAGE)
+
+@app.post("/scan")
+def scan():
+    data=request.get_json(silent=True) or {}
+    host=str(data.get("host","")).strip()
+    try:
+        port=int(data.get("port",443))
+    except (TypeError,ValueError):
+        return jsonify({"error":"Port must be a number."}),400
+    if not host:
+        return jsonify({"error":"Hostname is required."}),400
+    if not 1<=port<=65535:
+        return jsonify({"error":"Port must be between 1 and 65535."}),400
+    result=scan_tls(host,port)
+    generate_reports(result)
+    return jsonify(result)
+
+@app.get("/reports/<name>")
+def reports(name):
+    path=os.path.join(REPORT_DIR,name)
+    return send_file(path) if os.path.isfile(path) else ("Report not found",404)
+
+if __name__=="__main__":
+    print("="*60)
+    print("TLS Handshake Visualizer and Vulnerability Scanner")
+    print("Open http://127.0.0.1:5000")
+    print("="*60)
+    app.run(host="127.0.0.1",port=5000,debug=True)
