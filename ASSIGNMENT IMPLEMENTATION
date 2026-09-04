@@ -1,0 +1,459 @@
+import socket
+import requests
+import json
+from datetime import datetime
+from urllib.parse import urlparse
+
+
+# ============================================================
+# ETHICAL SECURITY ASSESSMENT FRAMEWORK
+# Academic / Authorized Laboratory Implementation
+# ============================================================
+
+print("=" * 65)
+print(" ETHICAL SECURITY ASSESSMENT FRAMEWORK")
+print(" Authorized Laboratory Environment Only")
+print("=" * 65)
+
+
+# ============================================================
+# GLOBAL VARIABLES
+# ============================================================
+
+findings = []
+
+
+# ============================================================
+# FUNCTION 1: AUTHORIZATION CHECK
+# ============================================================
+
+def authorization_check():
+    print("\n[PHASE 1] AUTHORIZATION AND SCOPE VERIFICATION")
+
+    print("\nImportant:")
+    print("This tool must only be used on localhost or")
+    print("an explicitly authorized laboratory environment.")
+
+    authorization = input("\nDo you have authorization? (yes/no): ").lower()
+
+    if authorization != "yes":
+        print("\n[ACCESS DENIED]")
+        print("Assessment stopped. Authorization is required.")
+        return False
+
+    print("\n[AUTHORIZED]")
+    print("Ethical assessment process can continue.")
+    return True
+
+
+# ============================================================
+# FUNCTION 2: TARGET VALIDATION
+# ============================================================
+
+def validate_target(target):
+    allowed_targets = [
+        "127.0.0.1",
+        "localhost"
+    ]
+
+    if target.lower() not in allowed_targets:
+        print("\n[SECURITY NOTICE]")
+        print("This academic implementation is restricted to localhost.")
+        print("Use an isolated authorized lab environment.")
+
+        return False
+
+    return True
+
+
+# ============================================================
+# FUNCTION 3: RECONNAISSANCE
+# ============================================================
+
+def reconnaissance(target):
+
+    print("\n" + "=" * 65)
+    print("[PHASE 2] RECONNAISSANCE")
+    print("=" * 65)
+
+    print("\nTarget Information:")
+    print("Target:", target)
+
+    try:
+        ip_address = socket.gethostbyname(target)
+
+        print("Resolved IP Address:", ip_address)
+
+        return {
+            "target": target,
+            "ip_address": ip_address,
+            "status": "Success"
+        }
+
+    except socket.gaierror:
+
+        print("Unable to resolve target.")
+
+        return {
+            "target": target,
+            "ip_address": "Unknown",
+            "status": "Failed"
+        }
+
+
+# ============================================================
+# FUNCTION 4: SAFE SERVICE CHECK
+# ============================================================
+
+def service_scan(target):
+
+    print("\n" + "=" * 65)
+    print("[PHASE 3] AUTHORIZED SERVICE DISCOVERY")
+    print("=" * 65)
+
+    # Common ports only for localhost lab demonstration
+    ports = {
+        80: "HTTP",
+        443: "HTTPS",
+        5000: "Flask Development Server",
+        8000: "Python HTTP Server",
+        8080: "Web Application"
+    }
+
+    open_services = []
+
+    for port, service in ports.items():
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+
+            result = sock.connect_ex((target, port))
+
+            if result == 0:
+
+                print(f"[OPEN] Port {port} - {service}")
+
+                open_services.append({
+                    "port": port,
+                    "service": service,
+                    "status": "Open"
+                })
+
+            else:
+                print(f"[CLOSED] Port {port} - {service}")
+
+            sock.close()
+
+        except Exception as error:
+
+            print(f"[ERROR] Port {port}: {error}")
+
+    return open_services
+
+
+# ============================================================
+# FUNCTION 5: HTTP SECURITY HEADER CHECK
+# ============================================================
+
+def check_security_headers():
+
+    print("\n" + "=" * 65)
+    print("[PHASE 4] WEB SECURITY CONFIGURATION ASSESSMENT")
+    print("=" * 65)
+
+    url = "http://localhost:5000"
+
+    required_headers = [
+        "Content-Security-Policy",
+        "X-Frame-Options",
+        "X-Content-Type-Options"
+    ]
+
+    try:
+
+        response = requests.get(url, timeout=3)
+
+        print("\nTarget URL:", url)
+        print("HTTP Status Code:", response.status_code)
+
+        for header in required_headers:
+
+            if header in response.headers:
+
+                print(f"[PASS] {header} is present")
+
+            else:
+
+                print(f"[WARNING] {header} is missing")
+
+                findings.append({
+                    "title": f"Missing Security Header: {header}",
+                    "severity": "Medium",
+                    "impact": "The web application may have reduced browser security protection.",
+                    "recommendation": f"Configure the {header} HTTP security header."
+                })
+
+    except requests.exceptions.ConnectionError:
+
+        print("\n[INFO]")
+        print("No web server detected on localhost:5000")
+        print("Skipping HTTP security header assessment.")
+
+    except Exception as error:
+
+        print("Error:", error)
+
+
+# ============================================================
+# FUNCTION 6: SAMPLE CONFIGURATION FINDINGS
+# ============================================================
+
+def configuration_assessment():
+
+    print("\n" + "=" * 65)
+    print("[PHASE 5] SECURITY CONFIGURATION ASSESSMENT")
+    print("=" * 65)
+
+    print("\nChecking example enterprise security controls...")
+
+    checks = [
+
+        {
+            "control": "Patch Management",
+            "status": "Needs Review",
+            "severity": "Medium",
+            "description": "Inconsistent security updates may expose systems to known vulnerabilities.",
+            "recommendation": "Implement centralized patch management."
+        },
+
+        {
+            "control": "Least Privilege",
+            "status": "Needs Review",
+            "severity": "High",
+            "description": "Excessive privileges can increase the impact of account compromise.",
+            "recommendation": "Review user roles and implement least privilege."
+        },
+
+        {
+            "control": "Centralized Logging",
+            "status": "Implemented",
+            "severity": "Informational",
+            "description": "Centralized logging improves incident investigation and accountability.",
+            "recommendation": "Continue monitoring log collection and retention."
+        }
+
+    ]
+
+    for check in checks:
+
+        print("\nControl:", check["control"])
+        print("Status:", check["status"])
+
+        if check["status"] == "Needs Review":
+
+            findings.append({
+                "title": check["control"],
+                "severity": check["severity"],
+                "impact": check["description"],
+                "recommendation": check["recommendation"]
+            })
+
+    return checks
+
+
+# ============================================================
+# FUNCTION 7: RISK SCORE
+# ============================================================
+
+def calculate_risk():
+
+    print("\n" + "=" * 65)
+    print("[PHASE 6] RISK ANALYSIS")
+    print("=" * 65)
+
+    severity_score = {
+        "Critical": 5,
+        "High": 4,
+        "Medium": 3,
+        "Low": 2,
+        "Informational": 1
+    }
+
+    for finding in findings:
+
+        score = severity_score.get(finding["severity"], 1)
+
+        finding["risk_score"] = score
+
+        if score >= 4:
+            priority = "High Priority"
+
+        elif score == 3:
+            priority = "Medium Priority"
+
+        else:
+            priority = "Low Priority"
+
+        finding["priority"] = priority
+
+        print("\nFinding:", finding["title"])
+        print("Severity:", finding["severity"])
+        print("Risk Score:", score)
+        print("Priority:", priority)
+
+
+# ============================================================
+# FUNCTION 8: GENERATE REPORT
+# ============================================================
+
+def generate_report(target, recon_data, services):
+
+    print("\n" + "=" * 65)
+    print("[PHASE 7] GENERATING VULNERABILITY REPORT")
+    print("=" * 65)
+
+    report = {
+
+        "assessment_title":
+            "Ethical Security Assessment Framework",
+
+        "assessment_date":
+            str(datetime.now()),
+
+        "target":
+            target,
+
+        "authorization":
+            "Confirmed",
+
+        "reconnaissance":
+            recon_data,
+
+        "discovered_services":
+            services,
+
+        "findings":
+            findings,
+
+        "recommendations": [
+
+            "Maintain a complete asset inventory.",
+
+            "Apply regular security patches.",
+
+            "Implement least privilege access control.",
+
+            "Use network segmentation.",
+
+            "Enable centralized logging and monitoring.",
+
+            "Implement strong authentication and MFA.",
+
+            "Review web security configurations.",
+
+            "Perform periodic authorized security assessments."
+        ]
+    }
+
+    with open("report.json", "w") as file:
+
+        json.dump(report, file, indent=4)
+
+    print("\n[SUCCESS]")
+    print("Security assessment report generated.")
+
+    print("\nFile Created:")
+    print("report.json")
+
+
+# ============================================================
+# FUNCTION 9: DISPLAY FINAL SUMMARY
+# ============================================================
+
+def display_summary(services):
+
+    print("\n" + "=" * 65)
+    print(" FINAL ASSESSMENT SUMMARY")
+    print("=" * 65)
+
+    print("\nAssessment Status: COMPLETED")
+
+    print("Services Identified:", len(services))
+
+    print("Security Findings:", len(findings))
+
+    high = 0
+    medium = 0
+    low = 0
+
+    for finding in findings:
+
+        if finding["severity"] in ["Critical", "High"]:
+            high += 1
+
+        elif finding["severity"] == "Medium":
+            medium += 1
+
+        else:
+            low += 1
+
+    print("\nRisk Distribution")
+
+    print("High:", high)
+    print("Medium:", medium)
+    print("Low/Informational:", low)
+
+    print("\nRecommended Action:")
+    print("Prioritize high-risk findings first.")
+
+    print("\nAssessment completed successfully.")
+
+
+# ============================================================
+# MAIN PROGRAM
+# ============================================================
+
+def main():
+
+    authorized = authorization_check()
+
+    if not authorized:
+        return
+
+    print("\nEnter target for authorized laboratory assessment.")
+    print("Allowed target: localhost or 127.0.0.1")
+
+    target = input("\nEnter Target: ")
+
+    if not validate_target(target):
+        return
+
+    # Phase 2
+    recon_data = reconnaissance(target)
+
+    # Phase 3
+    services = service_scan(target)
+
+    # Phase 4
+    check_security_headers()
+
+    # Phase 5
+    configuration_assessment()
+
+    # Phase 6
+    calculate_risk()
+
+    # Phase 7
+    generate_report(target, recon_data, services)
+
+    # Final Summary
+    display_summary(services)
+
+
+# ============================================================
+# PROGRAM EXECUTION
+# ============================================================
+
+if __name__ == "__main__":
+    main()
